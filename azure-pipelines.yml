@@ -1,0 +1,23 @@
+
+trigger:
+  - master
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - bash: |
+      set -euo pipefail
+
+      TERRAFORM_VERSION="1.12.2"
+      curl -fsSLo terraform.zip \
+        "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+
+      unzip -o terraform.zip -d terraform-bin
+      sudo install terraform-bin/terraform /usr/local/bin/terraform
+
+      terraform version
+      terraform fmt -check -recursive infra
+    displayName: 'Install Terraform and check formatting'
