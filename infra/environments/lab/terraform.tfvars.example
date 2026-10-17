@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars locally, fill in the subscription ID, and NEVER commit it.
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "centralindia"
+project_name    = "aep-lab"
