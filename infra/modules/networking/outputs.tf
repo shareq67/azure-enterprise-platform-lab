@@ -20,9 +20,9 @@ output "workload_vnet_id" {
 
 output "subnet_ids" {
   value = {
-    shared_services  = azurerm_subnet.shared_services.id
-    management       = azurerm_subnet.management.id
-    aks_nodes        = azurerm_subnet.aks_nodes.id
+    shared_services   = azurerm_subnet.shared_services.id
+    management        = azurerm_subnet.management.id
+    aks_nodes         = azurerm_subnet.aks_nodes.id
     private_endpoints = azurerm_subnet.private_endpoints.id
   }
 }

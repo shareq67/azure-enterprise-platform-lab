@@ -78,10 +78,10 @@ resource "azurerm_subnet_network_security_group_association" "management" {
 }
 
 resource "azurerm_virtual_network_peering" "hub_to_workload" {
-  name                      = "peer-hub-to-workload"
-  resource_group_name       = azurerm_resource_group.network.name
-  virtual_network_name      = azurerm_virtual_network.hub.name
-  remote_virtual_network_id = azurerm_virtual_network.workload.id
+  name                         = "peer-hub-to-workload"
+  resource_group_name          = azurerm_resource_group.network.name
+  virtual_network_name         = azurerm_virtual_network.hub.name
+  remote_virtual_network_id    = azurerm_virtual_network.workload.id
   allow_virtual_network_access = true
   allow_forwarded_traffic      = false
   allow_gateway_transit        = false
@@ -89,10 +89,10 @@ resource "azurerm_virtual_network_peering" "hub_to_workload" {
 }
 
 resource "azurerm_virtual_network_peering" "workload_to_hub" {
-  name                      = "peer-workload-to-hub"
-  resource_group_name       = azurerm_resource_group.network.name
-  virtual_network_name      = azurerm_virtual_network.workload.name
-  remote_virtual_network_id = azurerm_virtual_network.hub.id
+  name                         = "peer-workload-to-hub"
+  resource_group_name          = azurerm_resource_group.network.name
+  virtual_network_name         = azurerm_virtual_network.workload.name
+  remote_virtual_network_id    = azurerm_virtual_network.hub.id
   allow_virtual_network_access = true
   allow_forwarded_traffic      = false
   allow_gateway_transit        = false
