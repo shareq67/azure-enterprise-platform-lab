@@ -12,6 +12,7 @@ steps:
       set -euo pipefail
 
       TERRAFORM_VERSION="1.12.2"
+
       curl -fsSLo terraform.zip \
         "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
 
@@ -19,5 +20,15 @@ steps:
       sudo install terraform-bin/terraform /usr/local/bin/terraform
 
       terraform version
+    displayName: 'Install Terraform'
+
+  - bash: |
+      set -euo pipefail
       terraform fmt -check -recursive infra
-    displayName: 'Install Terraform and check formatting'
+    displayName: 'Check Terraform formatting'
+
+  - bash: |
+      set -euo pipefail
+      terraform -chdir=infra/environments/lab init -backend=false -input=false
+      terraform -chdir=infra/environments/lab validate
+    displayName: 'Initialize and validate Terraform'
