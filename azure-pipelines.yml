@@ -34,7 +34,7 @@ steps:
     displayName: 'Initialize and validate Terraform'
 
   - task: AzureCLI@2
-    displayName: 'Test Azure authentication and Terraform state access'
+    displayName: 'Terraform Plan using remote state'
     inputs:
       azureSubscription: 'mi-aep-lab-pipeline'
       scriptType: bash
@@ -42,8 +42,12 @@ steps:
       inlineScript: |
         set -euo pipefail
 
+        cd infra/environments/lab
+
         echo "Checking Azure authentication..."
         az account show --query "{subscription:name, id:id}" -o table
+
+        SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 
         echo "Checking Terraform state container access..."
         az storage blob list \
@@ -52,3 +56,19 @@ steps:
           --auth-mode login \
           --query "[].name" \
           -o table
+
+        echo "Initializing Terraform with Azure remote state..."
+        terraform init \
+          -input=false \
+          -reconfigure \
+          -backend-config="resource_group_name=rg-aep-lab-tfstate" \
+          -backend-config="storage_account_name=shareqaepstate545536" \
+          -backend-config="container_name=tfstate" \
+          -backend-config="key=lab-network.tfstate" \
+          -backend-config="use_azuread_auth=true"
+
+        echo "Generating Terraform plan..."
+        terraform plan \
+          -input=false \
+          -lock-timeout=60s \
+          -var="subscription_id=${SUBSCRIPTION_ID}"
