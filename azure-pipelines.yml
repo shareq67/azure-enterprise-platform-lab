@@ -32,3 +32,23 @@ steps:
       terraform -chdir=infra/environments/lab init -backend=false -input=false
       terraform -chdir=infra/environments/lab validate
     displayName: 'Initialize and validate Terraform'
+
+  - task: AzureCLI@2
+    displayName: 'Test Azure authentication and Terraform state access'
+    inputs:
+      azureSubscription: 'mi-aep-lab-pipeline'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        echo "Checking Azure authentication..."
+        az account show --query "{subscription:name, id:id}" -o table
+
+        echo "Checking Terraform state container access..."
+        az storage blob list \
+          --account-name shareqaepstate545536 \
+          --container-name tfstate \
+          --auth-mode login \
+          --query "[].name" \
+          -o table
