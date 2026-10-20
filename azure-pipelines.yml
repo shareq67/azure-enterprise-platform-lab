@@ -67,12 +67,17 @@ steps:
           -backend-config="key=lab-network.tfstate" \
           -backend-config="use_azuread_auth=true"
 
+        mkdir -p "$(Build.ArtifactStagingDirectory)"
+
         echo "Generating Terraform plan..."
         terraform plan \
           -input=false \
           -lock-timeout=60s \
           -var="subscription_id=${SUBSCRIPTION_ID}" \
           -out="$(Build.ArtifactStagingDirectory)/tfplan"
+
+        echo "Creating readable Terraform plan report..."
+        terraform show -no-color "$(Build.ArtifactStagingDirectory)/tfplan" > "$(Build.ArtifactStagingDirectory)/tfplan.txt"
 
   - task: PublishPipelineArtifact@1
     displayName: 'Publish Terraform Plan Artifact'
