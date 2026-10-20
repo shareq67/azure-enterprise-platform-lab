@@ -71,4 +71,12 @@ steps:
         terraform plan \
           -input=false \
           -lock-timeout=60s \
-          -var="subscription_id=${SUBSCRIPTION_ID}"
+          -var="subscription_id=${SUBSCRIPTION_ID}" \
+          -out="$(Build.ArtifactStagingDirectory)/tfplan"
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Publish Terraform Plan Artifact'
+    inputs:
+      targetPath: '$(Build.ArtifactStagingDirectory)'
+      artifact: 'terraform-plan'
+      publishLocation: 'pipeline'
