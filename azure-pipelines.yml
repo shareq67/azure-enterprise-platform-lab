@@ -5,83 +5,128 @@ trigger:
 pool:
   vmImage: ubuntu-latest
 
-steps:
-  - checkout: self
+stages:
+  # Stage 1: Validate Terraform and generate a plan
+  - stage: TerraformPlan
+    displayName: 'Terraform Plan'
+    jobs:
+      - job: ValidateAndPlan
+        displayName: 'Validate and Generate Plan'
+        steps:
+          - checkout: self
 
-  - bash: |
-      set -euo pipefail
+          - bash: |
+              set -euo pipefail
 
-      TERRAFORM_VERSION="1.12.2"
+              TERRAFORM_VERSION="1.12.2"
 
-      curl -fsSLo terraform.zip \
-        "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+              curl -fsSLo terraform.zip \
+                "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
 
-      unzip -o terraform.zip -d terraform-bin
-      sudo install terraform-bin/terraform /usr/local/bin/terraform
+              unzip -o terraform.zip -d terraform-bin
+              sudo install terraform-bin/terraform /usr/local/bin/terraform
 
-      terraform version
-    displayName: 'Install Terraform'
+              terraform version
+            displayName: 'Install Terraform'
 
-  - bash: |
-      set -euo pipefail
-      terraform fmt -check -recursive infra
-    displayName: 'Check Terraform formatting'
+          - bash: |
+              set -euo pipefail
+              terraform fmt -check -recursive infra
+            displayName: 'Check Terraform formatting'
 
-  - bash: |
-      set -euo pipefail
-      terraform -chdir=infra/environments/lab init -backend=false -input=false
-      terraform -chdir=infra/environments/lab validate
-    displayName: 'Initialize and validate Terraform'
+          - bash: |
+              set -euo pipefail
+              terraform -chdir=infra/environments/lab init -backend=false -input=false
+              terraform -chdir=infra/environments/lab validate
+            displayName: 'Initialize and Validate Terraform'
 
-  - task: AzureCLI@2
-    displayName: 'Terraform Plan using remote state'
-    inputs:
-      azureSubscription: 'mi-aep-lab-pipeline'
-      scriptType: bash
-      scriptLocation: inlineScript
-      inlineScript: |
-        set -euo pipefail
+          - task: AzureCLI@2
+            displayName: 'Generate Terraform Plan using Remote State'
+            inputs:
+              azureSubscription: 'mi-aep-lab-pipeline'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
 
-        cd infra/environments/lab
+                cd infra/environments/lab
 
-        echo "Checking Azure authentication..."
-        az account show --query "{subscription:name, id:id}" -o table
+                echo "Checking Azure authentication..."
+                az account show --query "{subscription:name, id:id}" -o table
 
-        SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 
-        echo "Checking Terraform state container access..."
-        az storage blob list \
-          --account-name shareqaepstate545536 \
-          --container-name tfstate \
-          --auth-mode login \
-          --query "[].name" \
-          -o table
+                echo "Checking remote Terraform state access..."
+                az storage blob list \
+                  --account-name shareqaepstate545536 \
+                  --container-name tfstate \
+                  --auth-mode login \
+                  --query "[].name" \
+                  -o table
 
-        echo "Initializing Terraform with Azure remote state..."
-        terraform init \
-          -input=false \
-          -reconfigure \
-          -backend-config="resource_group_name=rg-aep-lab-tfstate" \
-          -backend-config="storage_account_name=shareqaepstate545536" \
-          -backend-config="container_name=tfstate" \
-          -backend-config="key=lab-network.tfstate" \
-          -backend-config="use_azuread_auth=true"
+                echo "Initializing Terraform remote backend..."
+                terraform init \
+                  -input=false \
+                  -reconfigure \
+                  -backend-config="resource_group_name=rg-aep-lab-tfstate" \
+                  -backend-config="storage_account_name=shareqaepstate545536" \
+                  -backend-config="container_name=tfstate" \
+                  -backend-config="key=lab-network.tfstate" \
+                  -backend-config="use_azuread_auth=true"
 
-        mkdir -p "$(Build.ArtifactStagingDirectory)"
+                mkdir -p "$(Build.ArtifactStagingDirectory)"
 
-        echo "Generating Terraform plan..."
-        terraform plan \
-          -input=false \
-          -lock-timeout=60s \
-          -var="subscription_id=${SUBSCRIPTION_ID}" \
-          -out="$(Build.ArtifactStagingDirectory)/tfplan"
+                echo "Generating Terraform plan..."
+                terraform plan \
+                  -input=false \
+                  -lock-timeout=60s \
+                  -var="subscription_id=${SUBSCRIPTION_ID}" \
+                  -out="$(Build.ArtifactStagingDirectory)/tfplan"
 
-        echo "Creating readable Terraform plan report..."
-        terraform show -no-color "$(Build.ArtifactStagingDirectory)/tfplan" > "$(Build.ArtifactStagingDirectory)/tfplan.txt"
+                echo "Creating readable Terraform plan report..."
+                terraform show -no-color \
+                  "$(Build.ArtifactStagingDirectory)/tfplan" \
+                  > "$(Build.ArtifactStagingDirectory)/tfplan.txt"
 
-  - task: PublishPipelineArtifact@1
-    displayName: 'Publish Terraform Plan Artifact'
-    inputs:
-      targetPath: '$(Build.ArtifactStagingDirectory)'
-      artifact: 'terraform-plan'
-      publishLocation: 'pipeline'
+                echo "Terraform plan report created successfully."
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Terraform Plan Artifact'
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)'
+              artifact: 'terraform-plan'
+              publishLocation: 'pipeline'
+
+  # Stage 2: Test the configured approval gate; no deployment
+  - stage: ApprovalGateTest
+    displayName: 'Approval Gate Test'
+    dependsOn: TerraformPlan
+    condition: succeeded()
+    jobs:
+      - deployment: VerifyApprovalGate
+        displayName: 'Verify Environment Approval'
+        environment: 'aep-lab-approval'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: none
+
+                - download: current
+                  artifact: terraform-plan
+
+                - bash: |
+                    set -euo pipefail
+
+                    PLAN_REPORT="$(Pipeline.Workspace)/terraform-plan/tfplan.txt"
+
+                    if [ ! -f "$PLAN_REPORT" ]; then
+                      echo "ERROR: Terraform plan report was not found."
+                      exit 1
+                    fi
+
+                    echo "Approval gate completed."
+                    echo "Terraform plan report is available at:"
+                    echo "$PLAN_REPORT"
+                    echo "No Azure resources were changed."
+                  displayName: 'Verify Plan Artifact - No Apply'
