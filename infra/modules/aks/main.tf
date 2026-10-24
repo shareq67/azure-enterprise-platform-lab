@@ -11,15 +11,15 @@ resource "azurerm_kubernetes_cluster" "main" {
   location            = var.location
   resource_group_name = azurerm_resource_group.aks.name
   dns_prefix          = var.dns_prefix
-  
+
   sku_tier = "Free"
 
   default_node_pool {
-    name                = "system"
-    node_count          = 1
-    vm_size             = var.node_vm_size
-    os_disk_size_gb     = 30
-    type                = "VirtualMachineScaleSets"
+    name            = "system"
+    node_count      = 1
+    vm_size         = var.node_vm_size
+    os_disk_size_gb = 30
+    type            = "VirtualMachineScaleSets"
 
     upgrade_settings {
       max_surge = "10%"
