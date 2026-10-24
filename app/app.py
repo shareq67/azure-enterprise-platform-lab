@@ -8,7 +8,7 @@ def home():
     return jsonify({
         "project": "Azure Enterprise Platform Lab",
         "status": "Running",
-        "message": "Application deployed successfully!"
+        "message":"Version 2 deployed automatically through Azure DevOps CI/CD!"
     })
 
 @app.route("/health")
