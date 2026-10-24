@@ -26,3 +26,15 @@ output "subnet_ids" {
     private_endpoints = azurerm_subnet.private_endpoints.id
   }
 }
+
+
+output "workload_nsg_id" {
+  description = "Resource ID of the workload Network Security Group"
+  value       = azurerm_network_security_group.workload.id
+}
+
+output "management_nsg_id" {
+  description = "Resource ID of the management Network Security Group"
+  value       = azurerm_network_security_group.management.id
+}
+

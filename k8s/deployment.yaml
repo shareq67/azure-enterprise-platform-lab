@@ -1,0 +1,41 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aep-lab-app
+  labels:
+    app: aep-lab-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aep-lab-app
+  template:
+    metadata:
+      labels:
+        app: aep-lab-app
+    spec:
+      containers:
+        - name: aep-lab-app
+          image: shareqaepacr2026.azurecr.io/aep-lab-app:latest
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
