@@ -130,3 +130,43 @@ stages:
                     echo "$PLAN_REPORT"
                     echo "No Azure resources were changed."
                   displayName: 'Verify Plan Artifact - No Apply'
+
+
+  - stage: BuildAndPushImage
+    displayName: 'Build and Push Docker Image'
+    dependsOn: ApprovalGateTest
+    condition: succeeded()
+    jobs:
+      - job: BuildPush
+        displayName: 'Build and Push to Azure Container Registry'
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Build and Push Image to ACR'
+            inputs:
+              azureSubscription: 'mi-aep-lab-pipeline'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+
+                ACR_NAME="shareqaepacr2026"
+                LOGIN_SERVER="shareqaepacr2026.azurecr.io"
+                IMAGE_NAME="aep-lab-app"
+
+                echo "Logging in to Azure Container Registry..."
+                az acr login --name "$ACR_NAME"
+
+                echo "Building Docker image..."
+                docker build \
+                  -t "$LOGIN_SERVER/$IMAGE_NAME:$(Build.BuildId)" \
+                  -t "$LOGIN_SERVER/$IMAGE_NAME:latest" .
+
+                echo "Pushing versioned image..."
+                docker push "$LOGIN_SERVER/$IMAGE_NAME:$(Build.BuildId)"
+
+                echo "Pushing latest image..."
+                docker push "$LOGIN_SERVER/$IMAGE_NAME:latest"
+
+                echo "Docker image build and push completed."
