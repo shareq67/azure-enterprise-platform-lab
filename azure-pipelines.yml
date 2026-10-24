@@ -170,3 +170,52 @@ stages:
                 docker push "$LOGIN_SERVER/$IMAGE_NAME:latest"
 
                 echo "Docker image build and push completed."
+
+  # Stage 4: Deploy application to AKS
+  - stage: DeployToAKS
+    displayName: 'Deploy Application to AKS'
+    dependsOn: BuildAndPushImage
+    condition: succeeded()
+    jobs:
+      - job: Deploy
+        displayName: 'Deploy and Verify Application'
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy Image to AKS'
+            inputs:
+              azureSubscription: 'mi-aep-lab-pipeline'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+
+                RESOURCE_GROUP="rg-aep-lab-aks"
+                CLUSTER_NAME="aks-aep-lab"
+                ACR_LOGIN_SERVER="shareqaepacr2026.azurecr.io"
+                IMAGE_NAME="aep-lab-app"
+                IMAGE_TAG="$(Build.BuildId)"
+
+                echo "Getting AKS credentials..."
+                az aks get-credentials \
+                  --resource-group "$RESOURCE_GROUP" \
+                  --name "$CLUSTER_NAME" \
+                  --admin \
+                  --overwrite-existing
+
+                echo "Checking cluster access..."
+                kubectl get nodes
+
+                echo "Deploying the build-specific image..."
+                kubectl set image deployment/aep-lab-app \
+                  aep-lab-app="$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG"
+
+                echo "Waiting for rollout..."
+                kubectl rollout status deployment/aep-lab-app \
+                  --timeout=180s
+
+                echo "Checking deployed application..."
+                kubectl get deployments,pods,services
+
+                echo "AKS deployment completed successfully."
