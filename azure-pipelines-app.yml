@@ -9,6 +9,7 @@ trigger:
       - tests/**
       - Dockerfile
       - azure-pipelines-app.yml
+
 pool:
   vmImage: ubuntu-latest
 
@@ -20,30 +21,35 @@ variables:
   AKS_CLUSTER_NAME: aks-aep-lab
 
 stages:
+  # Stage 1: Run application unit tests
   - stage: Test
     displayName: Application Tests
     jobs:
       - job: RunTests
+        displayName: Run Python Unit Tests
         steps:
           - checkout: self
 
           - task: UsePythonVersion@0
+            displayName: Setup Python 3.12
             inputs:
               versionSpec: '3.12'
-            displayName: Setup Python
 
           - script: |
+              set -e
               python -m pip install --upgrade pip
               pip install -r app/requirements.txt
               python -m unittest discover -s tests -v
-            displayName: Install dependencies and run tests
+            displayName: Install Dependencies and Run Tests
 
+  # Stage 2: Build and push image to ACR
   - stage: BuildAndPush
     displayName: Build and Push Image
     dependsOn: Test
     condition: succeeded()
     jobs:
       - job: Build
+        displayName: Build Docker Image
         steps:
           - checkout: self
 
@@ -55,22 +61,28 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 set -euo pipefail
+
                 az acr login --name "$(ACR_NAME)"
+
                 docker build \
                   -t "$(ACR_LOGIN_SERVER)/$(IMAGE_NAME):$(Build.BuildId)" .
-                docker push "$(ACR_LOGIN_SERVER)/$(IMAGE_NAME):$(Build.BuildId)"
 
+                docker push \
+                  "$(ACR_LOGIN_SERVER)/$(IMAGE_NAME):$(Build.BuildId)"
+
+  # Stage 3: Deploy to AKS and verify application health
   - stage: Deploy
     displayName: Deploy to AKS
     dependsOn: BuildAndPush
     condition: succeeded()
     jobs:
       - job: DeployApp
+        displayName: Deploy and Verify
         steps:
           - checkout: self
 
           - task: AzureCLI@2
-            displayName: Deploy and Verify
+            displayName: Deploy Application and Check Health
             inputs:
               azureSubscription: mi-aep-lab-pipeline
               scriptType: bash
@@ -78,16 +90,42 @@ stages:
               inlineScript: |
                 set -euo pipefail
 
+                echo "Getting AKS credentials..."
+
                 az aks get-credentials \
                   --resource-group "$(AKS_RESOURCE_GROUP)" \
                   --name "$(AKS_CLUSTER_NAME)" \
                   --admin \
                   --overwrite-existing
 
+                echo "Deploying image $(Build.BuildId)..."
+
                 kubectl set image deployment/aep-lab-app \
                   aep-lab-app="$(ACR_LOGIN_SERVER)/$(IMAGE_NAME):$(Build.BuildId)"
 
-                kubectl rollout status deployment/aep-lab-app --timeout=180s
+                echo "Waiting for deployment rollout..."
+
+                kubectl rollout status deployment/aep-lab-app \
+                  --timeout=180s
+
+                echo "Checking pods and services..."
 
                 kubectl get pods
                 kubectl get services
+
+                echo "Checking application health endpoint..."
+
+                for i in {1..12}; do
+                  if curl --connect-timeout 5 -fsS \
+                    http://4.187.159.209/health; then
+                    echo ""
+                    echo "Application health check passed."
+                    exit 0
+                  fi
+
+                  echo "Attempt $i/12: Application not healthy yet."
+                  sleep 10
+                done
+
+                echo "Application health check failed."
+                exit 1
