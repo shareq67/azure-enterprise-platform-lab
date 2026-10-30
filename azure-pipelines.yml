@@ -6,49 +6,125 @@ trigger:
   paths:
     include:
       - infra/**
+      - azure-pipelines.yml
 
 pool:
   vmImage: ubuntu-latest
 
+variables:
+  TERRAFORM_VERSION: '1.13.3'
+  SERVICE_CONNECTION: 'mi-aep-lab-pipeline'
+  TF_RESOURCE_GROUP: 'rg-aep-lab-tfstate'
+  TF_STORAGE_ACCOUNT: 'shareqaepstate545536'
+  TF_CONTAINER: 'tfstate'
+  TF_STATE_KEY: 'lab-network.tfstate'
+
 stages:
-  # Stage 1: Validate Terraform and generate a plan
-  - stage: TerraformPlan
-    displayName: 'Terraform Plan'
-    jobs:
-      - job: ValidateAndPlan
-        displayName: 'Validate and Generate Plan'
-        steps:
+
+# Stage 1: Terraform Format, Validate and Plan
+- stage: TerraformPlan
+  displayName: Terraform Plan
+  jobs:
+  - job: Plan
+    displayName: Validate and Generate Plan
+    steps:
+    - checkout: self
+
+    - bash: |
+        set -euo pipefail
+        VERSION="$(TERRAFORM_VERSION)"
+        curl -fsSLo terraform.zip \
+          "https://releases.hashicorp.com/terraform/${VERSION}/terraform_${VERSION}_linux_amd64.zip"
+        unzip -o terraform.zip -d terraform-bin
+        sudo install terraform-bin/terraform /usr/local/bin/terraform
+        terraform version
+      displayName: Install Terraform
+
+    - bash: |
+        set -euo pipefail
+        terraform fmt -check -recursive infra
+      displayName: Check Terraform Formatting
+
+    - bash: |
+        set -euo pipefail
+        terraform -chdir=infra/environments/lab init -backend=false -input=false
+        terraform -chdir=infra/environments/lab validate
+      displayName: Terraform Validate
+
+    - task: AzureCLI@2
+      displayName: Generate Terraform Plan
+      inputs:
+        azureSubscription: $(SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          cd infra/environments/lab
+
+          az account show -o table
+          SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+          terraform init \
+            -input=false \
+            -reconfigure \
+            -backend-config="resource_group_name=$(TF_RESOURCE_GROUP)" \
+            -backend-config="storage_account_name=$(TF_STORAGE_ACCOUNT)" \
+            -backend-config="container_name=$(TF_CONTAINER)" \
+            -backend-config="key=$(TF_STATE_KEY)" \
+            -backend-config="use_azuread_auth=true"
+
+          mkdir -p "$(Build.ArtifactStagingDirectory)"
+
+          terraform plan \
+            -input=false \
+            -lock-timeout=60s \
+            -var="subscription_id=${SUBSCRIPTION_ID}" \
+            -out="$(Build.ArtifactStagingDirectory)/tfplan"
+
+          terraform show -no-color \
+            "$(Build.ArtifactStagingDirectory)/tfplan" \
+            > "$(Build.ArtifactStagingDirectory)/tfplan.txt"
+
+    - task: PublishPipelineArtifact@1
+      displayName: Publish Terraform Plan
+      inputs:
+        targetPath: $(Build.ArtifactStagingDirectory)
+        artifact: terraform-plan
+        publishLocation: pipeline
+
+# Stage 2: Approval and Terraform Apply
+- stage: TerraformApply
+  displayName: Approval and Terraform Apply
+  dependsOn: TerraformPlan
+  condition: succeeded()
+  jobs:
+  - deployment: ApplyInfrastructure
+    displayName: Apply Approved Terraform Plan
+    environment: aep-lab-infra-approval
+    strategy:
+      runOnce:
+        deploy:
+          steps:
           - checkout: self
 
+          - download: current
+            artifact: terraform-plan
+
           - bash: |
               set -euo pipefail
-
-              TERRAFORM_VERSION="1.12.2"
-
+              VERSION="$(TERRAFORM_VERSION)"
               curl -fsSLo terraform.zip \
-                "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
-
+                "https://releases.hashicorp.com/terraform/${VERSION}/terraform_${VERSION}_linux_amd64.zip"
               unzip -o terraform.zip -d terraform-bin
               sudo install terraform-bin/terraform /usr/local/bin/terraform
-
               terraform version
-            displayName: 'Install Terraform'
-
-          - bash: |
-              set -euo pipefail
-              terraform fmt -check -recursive infra
-            displayName: 'Check Terraform formatting'
-
-          - bash: |
-              set -euo pipefail
-              terraform -chdir=infra/environments/lab init -backend=false -input=false
-              terraform -chdir=infra/environments/lab validate
-            displayName: 'Initialize and Validate Terraform'
+            displayName: Install Terraform
 
           - task: AzureCLI@2
-            displayName: 'Generate Terraform Plan using Remote State'
+            displayName: Apply Approved Terraform Plan
             inputs:
-              azureSubscription: 'mi-aep-lab-pipeline'
+              azureSubscription: $(SERVICE_CONNECTION)
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |
@@ -56,171 +132,35 @@ stages:
 
                 cd infra/environments/lab
 
-                echo "Checking Azure authentication..."
-                az account show --query "{subscription:name, id:id}" -o table
+                PLAN_FILE="$(Pipeline.Workspace)/terraform-plan/tfplan"
 
-                SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                if [ ! -f "$PLAN_FILE" ]; then
+                  echo "ERROR: Saved Terraform plan not found."
+                  exit 1
+                fi
 
-                echo "Checking remote Terraform state access..."
-                az storage blob list \
-                  --account-name shareqaepstate545536 \
-                  --container-name tfstate \
-                  --auth-mode login \
-                  --query "[].name" \
-                  -o table
-
-                echo "Initializing Terraform remote backend..."
                 terraform init \
                   -input=false \
                   -reconfigure \
-                  -backend-config="resource_group_name=rg-aep-lab-tfstate" \
-                  -backend-config="storage_account_name=shareqaepstate545536" \
-                  -backend-config="container_name=tfstate" \
-                  -backend-config="key=lab-network.tfstate" \
+                  -backend-config="resource_group_name=$(TF_RESOURCE_GROUP)" \
+                  -backend-config="storage_account_name=$(TF_STORAGE_ACCOUNT)" \
+                  -backend-config="container_name=$(TF_CONTAINER)" \
+                  -backend-config="key=$(TF_STATE_KEY)" \
                   -backend-config="use_azuread_auth=true"
 
-                mkdir -p "$(Build.ArtifactStagingDirectory)"
-
-                echo "Generating Terraform plan..."
-                terraform plan \
+                echo "Applying the approved saved plan..."
+                terraform apply \
                   -input=false \
                   -lock-timeout=60s \
-                  -var="subscription_id=${SUBSCRIPTION_ID}" \
-                  -out="$(Build.ArtifactStagingDirectory)/tfplan"
+                  "$PLAN_FILE"
 
-                echo "Creating readable Terraform plan report..."
-                terraform show -no-color \
-                  "$(Build.ArtifactStagingDirectory)/tfplan" \
-                  > "$(Build.ArtifactStagingDirectory)/tfplan.txt"
+                echo "Terraform Apply completed."
 
-                echo "Terraform plan report created successfully."
+                echo "Verifying AKS cluster..."
+                az aks show \
+                  --resource-group rg-aep-lab-aks \
+                  --name aks-aep-lab \
+                  --query "{name:name,state:provisioningState}" \
+                  --output table
 
-          - task: PublishPipelineArtifact@1
-            displayName: 'Publish Terraform Plan Artifact'
-            inputs:
-              targetPath: '$(Build.ArtifactStagingDirectory)'
-              artifact: 'terraform-plan'
-              publishLocation: 'pipeline'
-
-  # Stage 2: Test the configured approval gate; no deployment
-  - stage: ApprovalGateTest
-    displayName: 'Approval Gate Test'
-    dependsOn: TerraformPlan
-    condition: succeeded()
-    jobs:
-      - deployment: VerifyApprovalGate
-        displayName: 'Verify Environment Approval'
-        environment: 'aep-lab-approval'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: none
-
-                - download: current
-                  artifact: terraform-plan
-
-                - bash: |
-                    set -euo pipefail
-
-                    PLAN_REPORT="$(Pipeline.Workspace)/terraform-plan/tfplan.txt"
-
-                    if [ ! -f "$PLAN_REPORT" ]; then
-                      echo "ERROR: Terraform plan report was not found."
-                      exit 1
-                    fi
-
-                    echo "Approval gate completed."
-                    echo "Terraform plan report is available at:"
-                    echo "$PLAN_REPORT"
-                    echo "No Azure resources were changed."
-                  displayName: 'Verify Plan Artifact - No Apply'
-
-
-  - stage: BuildAndPushImage
-    displayName: 'Build and Push Docker Image'
-    dependsOn: ApprovalGateTest
-    condition: succeeded()
-    jobs:
-      - job: BuildPush
-        displayName: 'Build and Push to Azure Container Registry'
-        steps:
-          - checkout: self
-
-          - task: AzureCLI@2
-            displayName: 'Build and Push Image to ACR'
-            inputs:
-              azureSubscription: 'mi-aep-lab-pipeline'
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                set -euo pipefail
-
-                ACR_NAME="shareqaepacr2026"
-                LOGIN_SERVER="shareqaepacr2026.azurecr.io"
-                IMAGE_NAME="aep-lab-app"
-
-                echo "Logging in to Azure Container Registry..."
-                az acr login --name "$ACR_NAME"
-
-                echo "Building Docker image..."
-                docker build \
-                  -t "$LOGIN_SERVER/$IMAGE_NAME:$(Build.BuildId)" \
-                  -t "$LOGIN_SERVER/$IMAGE_NAME:latest" .
-
-                echo "Pushing versioned image..."
-                docker push "$LOGIN_SERVER/$IMAGE_NAME:$(Build.BuildId)"
-
-                echo "Pushing latest image..."
-                docker push "$LOGIN_SERVER/$IMAGE_NAME:latest"
-
-                echo "Docker image build and push completed."
-
-  # Stage 4: Deploy application to AKS
-  - stage: DeployToAKS
-    displayName: 'Deploy Application to AKS'
-    dependsOn: BuildAndPushImage
-    condition: succeeded()
-    jobs:
-      - job: Deploy
-        displayName: 'Deploy and Verify Application'
-        steps:
-          - checkout: self
-
-          - task: AzureCLI@2
-            displayName: 'Deploy Image to AKS'
-            inputs:
-              azureSubscription: 'mi-aep-lab-pipeline'
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                set -euo pipefail
-
-                RESOURCE_GROUP="rg-aep-lab-aks"
-                CLUSTER_NAME="aks-aep-lab"
-                ACR_LOGIN_SERVER="shareqaepacr2026.azurecr.io"
-                IMAGE_NAME="aep-lab-app"
-                IMAGE_TAG="$(Build.BuildId)"
-
-                echo "Getting AKS credentials..."
-                az aks get-credentials \
-                  --resource-group "$RESOURCE_GROUP" \
-                  --name "$CLUSTER_NAME" \
-                  --admin \
-                  --overwrite-existing
-
-                echo "Checking cluster access..."
-                kubectl get nodes
-
-                echo "Deploying the build-specific image..."
-                kubectl set image deployment/aep-lab-app \
-                  aep-lab-app="$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG"
-
-                echo "Waiting for rollout..."
-                kubectl rollout status deployment/aep-lab-app \
-                  --timeout=180s
-
-                echo "Checking deployed application..."
-                kubectl get deployments,pods,services
-
-                echo "AKS deployment completed successfully."
+                echo "Infrastructure verification completed."
